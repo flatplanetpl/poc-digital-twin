@@ -1,4 +1,9 @@
-"""RAG query engine for question answering."""
+"""RAG query engine for question answering.
+
+FR-P0-1: Grounded Answers - responses ONLY from indexed data with citations.
+"""
+
+import time
 
 from llama_index.core import Settings as LlamaSettings
 from llama_index.core.query_engine import RetrieverQueryEngine
@@ -7,28 +12,31 @@ from llama_index.core.response_synthesizers import get_response_synthesizer
 from src.config import settings
 from src.indexer import VectorStore
 from src.llm import BaseLLM, create_llm
+from src.rag.citations import (
+    Citation,
+    GroundedResponse,
+    extract_citations,
+    validate_grounding,
+    GROUNDED_SYSTEM_PROMPT,
+)
+from src.rag.explainability import (
+    RAGExplanation,
+    create_retrieval_explanation,
+    create_context_explanation,
+)
 from src.storage import ChatHistory
 
 
 class RAGEngine:
-    """RAG engine for querying personal data."""
+    """RAG engine for querying personal data.
 
-    SYSTEM_PROMPT = """You are a helpful AI assistant with access to the user's personal data.
-Your role is to answer questions based on the provided context from their notes, emails, and chats.
+    FR-P0-1: All responses are grounded in indexed data with
+    mandatory source citations. The LLM is instructed to ONLY
+    use provided context and cite sources for every fact.
+    """
 
-Guidelines:
-- Only use information from the provided context
-- If you don't find relevant information, say so clearly
-- When citing information, mention the source type (email, note, chat)
-- Be concise but complete in your answers
-- Respect the user's privacy - don't make assumptions about data not in context
-
-Context from user's data:
-{context_str}
-
-User's question: {query_str}
-
-Answer based on the context above:"""
+    # Use grounded prompt that enforces citations
+    SYSTEM_PROMPT = GROUNDED_SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -73,18 +81,25 @@ Answer based on the context above:"""
         conversation_id: int | None = None,
         top_k: int | None = None,
         include_sources: bool = True,
+        include_explanation: bool = False,
     ) -> dict:
-        """Query the RAG system.
+        """Query the RAG system with grounded answers.
+
+        FR-P0-1: Responses are grounded in indexed data with citations.
+        FR-P0-4: Optional explainability showing retrieval decisions.
 
         Args:
             question: User's question
             conversation_id: Optional conversation ID for context
             top_k: Number of documents to retrieve
             include_sources: Whether to include source metadata
+            include_explanation: Whether to include RAG explanation
 
         Returns:
-            Dict with 'answer', 'sources', and optionally 'conversation_id'
+            Dict with 'answer', 'sources', 'citations', 'is_grounded',
+            and optionally 'explanation' and 'conversation_id'
         """
+        start_time = time.time()
         top_k = top_k or settings.top_k
 
         # Build query engine
@@ -107,18 +122,43 @@ Answer based on the context above:"""
             question, conversation_id
         )
 
+        # Track retrieval time
+        retrieval_start = time.time()
+
         # Execute query
         response = query_engine.query(full_question)
 
-        # Extract sources
-        sources = []
+        retrieval_time_ms = (time.time() - retrieval_start) * 1000
+
+        # Track generation time (approximate - includes response synthesis)
+        generation_start = time.time()
+
+        # Calculate total query time
+        query_time_ms = (time.time() - start_time) * 1000
+        generation_time_ms = query_time_ms - retrieval_time_ms
+
+        # Extract structured citations (FR-P0-1)
+        citations: list[Citation] = []
         if include_sources and response.source_nodes:
-            for node in response.source_nodes:
-                sources.append({
-                    "content": node.text[:200] + "..." if len(node.text) > 200 else node.text,
-                    "metadata": node.metadata,
-                    "score": node.score,
-                })
+            citations = extract_citations(response.source_nodes)
+
+        # Check if response is properly grounded
+        answer = str(response)
+        is_grounded = validate_grounding(answer, citations)
+        no_context_found = not citations or "could not find" in answer.lower()
+
+        # Build grounded response
+        grounded_response = GroundedResponse(
+            answer=answer,
+            citations=citations,
+            is_grounded=is_grounded,
+            no_context_found=no_context_found,
+            conversation_id=conversation_id,
+            query_time_ms=query_time_ms,
+        )
+
+        # Legacy sources format for backward compatibility
+        sources = grounded_response.sources
 
         # Save to chat history if conversation exists
         if conversation_id:
@@ -130,15 +170,86 @@ Answer based on the context above:"""
             self.chat_history.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
-                content=str(response),
+                content=answer,
                 sources=sources,
             )
 
-        return {
-            "answer": str(response),
+        result = {
+            "answer": answer,
             "sources": sources,
+            "citations": [c.to_dict() for c in citations],
+            "is_grounded": is_grounded,
+            "no_context_found": no_context_found,
             "conversation_id": conversation_id,
+            "query_time_ms": query_time_ms,
         }
+
+        # FR-P0-4: Build explainability data if requested
+        if include_explanation and response.source_nodes:
+            explanation = self._build_explanation(
+                query_text=full_question,
+                source_nodes=response.source_nodes,
+                top_k=top_k,
+                retrieval_time_ms=retrieval_time_ms,
+                generation_time_ms=generation_time_ms,
+                total_time_ms=query_time_ms,
+            )
+            result["explanation"] = explanation.to_dict()
+
+        return result
+
+    def _build_explanation(
+        self,
+        query_text: str,
+        source_nodes: list,
+        top_k: int,
+        retrieval_time_ms: float,
+        generation_time_ms: float,
+        total_time_ms: float,
+    ) -> RAGExplanation:
+        """Build RAG explanation from query results.
+
+        FR-P0-4: Creates detailed explanation of retrieval decisions.
+
+        Args:
+            query_text: The query that was executed
+            source_nodes: Retrieved source nodes
+            top_k: Number of documents requested
+            retrieval_time_ms: Time spent on retrieval
+            generation_time_ms: Time spent on generation
+            total_time_ms: Total query time
+
+        Returns:
+            RAGExplanation with full breakdown
+        """
+        # Build retrieval explanations for each document
+        doc_explanations = []
+        for i, node in enumerate(source_nodes):
+            doc_explanations.append(
+                create_retrieval_explanation(node, rank=i + 1)
+            )
+
+        # Build context window explanation
+        context_explanation = create_context_explanation(source_nodes)
+
+        # Get LLM info
+        llm_provider = self.llm_provider.name
+        llm_model = getattr(settings, f"{settings.llm_provider}_model", "unknown")
+
+        return RAGExplanation(
+            query_text=query_text,
+            query_embedding_model=settings.embedding_model,
+            retrieval_mode="similarity",  # Would be "priority_weighted" if using search_with_priority
+            retrieval_top_k=top_k,
+            documents_retrieved=doc_explanations,
+            context_window=context_explanation,
+            response_mode="compact",
+            llm_provider=llm_provider,
+            llm_model=llm_model,
+            retrieval_time_ms=retrieval_time_ms,
+            generation_time_ms=generation_time_ms,
+            total_time_ms=total_time_ms,
+        )
 
     def _get_qa_prompt(self):
         """Get the QA prompt template."""

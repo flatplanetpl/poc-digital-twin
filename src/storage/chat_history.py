@@ -337,3 +337,105 @@ class ChatHistory:
 
             # Return in chronological order
             return list(reversed(messages))
+
+    # =========================================
+    # FR-P0-5: Forget / Right to Be Forgotten
+    # =========================================
+
+    def purge_by_document(self, document_id: str) -> int:
+        """Remove all references to a deleted document from chat history.
+
+        This removes the document from the 'sources' field of messages
+        that cited it, but does NOT delete the messages themselves.
+
+        Args:
+            document_id: ID of the deleted document
+
+        Returns:
+            Number of messages updated
+        """
+        with self._get_connection() as conn:
+            # Find messages with sources containing this document
+            rows = conn.execute(
+                "SELECT id, sources FROM messages WHERE sources IS NOT NULL"
+            ).fetchall()
+
+            updated = 0
+            for row in rows:
+                sources = json.loads(row["sources"]) if row["sources"] else []
+
+                # Filter out the deleted document
+                new_sources = [
+                    s for s in sources
+                    if s.get("metadata", {}).get("document_id") != document_id
+                ]
+
+                # Update if sources changed
+                if len(new_sources) != len(sources):
+                    conn.execute(
+                        "UPDATE messages SET sources = ? WHERE id = ?",
+                        (
+                            json.dumps(new_sources) if new_sources else None,
+                            row["id"],
+                        ),
+                    )
+                    updated += 1
+
+            return updated
+
+    def purge_by_entity(self, entity_type: str, entity_value: str) -> int:
+        """Remove references to an entity from chat history.
+
+        This removes sources that match the entity from message sources.
+
+        Args:
+            entity_type: Type of entity (sender, source_type, etc.)
+            entity_value: Value to match
+
+        Returns:
+            Number of messages updated
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, sources FROM messages WHERE sources IS NOT NULL"
+            ).fetchall()
+
+            updated = 0
+            for row in rows:
+                sources = json.loads(row["sources"]) if row["sources"] else []
+
+                # Filter out matching sources
+                new_sources = [
+                    s for s in sources
+                    if s.get("metadata", {}).get(entity_type) != entity_value
+                ]
+
+                if len(new_sources) != len(sources):
+                    conn.execute(
+                        "UPDATE messages SET sources = ? WHERE id = ?",
+                        (
+                            json.dumps(new_sources) if new_sources else None,
+                            row["id"],
+                        ),
+                    )
+                    updated += 1
+
+            return updated
+
+    def purge_messages_containing(self, text_pattern: str) -> int:
+        """Delete messages containing specific text pattern.
+
+        WARNING: This is more aggressive - deletes entire messages.
+
+        Args:
+            text_pattern: Text pattern to match
+
+        Returns:
+            Number of messages deleted
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM messages WHERE content LIKE ?",
+                (f"%{text_pattern}%",),
+            )
+            return cursor.rowcount
