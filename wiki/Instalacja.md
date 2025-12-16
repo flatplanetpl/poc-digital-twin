@@ -334,6 +334,106 @@ sudo apt install -y python3.11 python3.11-venv docker.io
 # Kontynuuj od Kroku 1
 ```
 
+### RunPod.io (GPU w chmurze)
+
+Szybki start na RunPod — idealny do testów z GPU lub gdy nie chcesz instalować lokalnie.
+
+#### Krok 1: Utwórz Pod
+
+1. Zarejestruj się na [runpod.io](https://runpod.io)
+2. Kliknij **"+ Deploy"** → **"GPU Pod"**
+3. Wybierz template: **"RunPod Pytorch 2.1"** (lub podobny z Python 3.10+)
+4. Wybierz GPU: **RTX 3090** lub **RTX 4090** (dla szybkiego GPT4All)
+5. Disk: **50 GB** (na model + dane)
+6. Kliknij **"Deploy On-Demand"** lub **"Spot"** (tańsze)
+
+#### Krok 2: Połącz się przez SSH/Terminal
+
+```bash
+# W konsoli RunPod (Web Terminal) lub przez SSH:
+
+# Zainstaluj Docker
+curl -fsSL https://get.docker.com | sh
+
+# Uruchom Qdrant
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+
+# Sklonuj repo
+git clone https://github.com/flatplanetpl/poc-digital-twin.git
+cd poc-digital-twin
+
+# Utwórz venv i zainstaluj
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Konfiguracja
+cp .env.example .env
+```
+
+#### Krok 3: Konfiguracja dla RunPod
+
+Edytuj `.env`:
+
+```bash
+# Qdrant (localhost w kontenerze)
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+
+# LLM — możesz użyć GPU!
+LLM_PROVIDER=gpt4all
+GPT4ALL_MODEL=mistral-7b-instruct-v0.1.Q4_0.gguf
+
+# Lub użyj OpenAI/Anthropic (szybciej, bez GPU):
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=sk-...
+```
+
+#### Krok 4: Uruchom
+
+```bash
+# Dodaj dane testowe
+mkdir -p data/notes
+echo "To jest testowa notatka o projekcie Alpha." > data/notes/test.md
+
+# Indeksuj
+python scripts/ingest.py --source ./data/
+
+# Uruchom UI (z publicznym dostępem)
+streamlit run src/ui/app.py --server.port 8501 --server.address 0.0.0.0
+```
+
+#### Krok 5: Dostęp do UI
+
+1. W RunPod: **"Connect"** → **"HTTP Service [Port 8501]"**
+2. Lub użyj **Public IP** pod-a: `http://<POD_IP>:8501`
+
+#### Tips dla RunPod
+
+```bash
+# Szybsze pobieranie modelu GPT4All (przez aria2)
+apt install -y aria2
+aria2c -x 16 -s 16 -o ~/.cache/gpt4all/mistral-7b-instruct-v0.1.Q4_0.gguf \
+  "https://gpt4all.io/models/gguf/mistral-7b-instruct-v0.1.Q4_0.gguf"
+
+# Persistentny storage — zamontuj Network Volume
+# W ustawieniach Pod: Attach Network Volume
+# Dane będą w /runpod-volume/
+
+# Tańsza opcja — użyj Spot Instance
+# Ale pamiętaj: może zostać przerwany!
+```
+
+#### Szacunkowe koszty RunPod
+
+| GPU | Cena/h (On-Demand) | Cena/h (Spot) |
+|-----|:------------------:|:-------------:|
+| RTX 3090 | ~$0.44 | ~$0.20 |
+| RTX 4090 | ~$0.74 | ~$0.34 |
+| A100 40GB | ~$1.64 | ~$0.80 |
+
+> **Tip:** Dla samego testowania użyj **Spot** + **OpenAI API** (bez GPU) — najtaniej.
+
 ---
 
 ## Rozwiązywanie problemów instalacyjnych
