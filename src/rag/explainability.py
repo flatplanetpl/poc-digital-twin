@@ -134,9 +134,9 @@ class RAGExplanation:
     context_window: ContextWindowExplanation | None = None
 
     # Response info
-    response_mode: str  # "compact", "refine", "tree_summarize"
-    llm_provider: str
-    llm_model: str
+    response_mode: str = ""  # "compact", "refine", "tree_summarize"
+    llm_provider: str = ""
+    llm_model: str = ""
 
     # Timing breakdown (milliseconds)
     retrieval_time_ms: float = 0.0
