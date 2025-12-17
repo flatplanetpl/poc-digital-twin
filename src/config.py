@@ -60,8 +60,8 @@ class Settings(BaseSettings):
     anthropic_model: str = Field(default="claude-3-sonnet-20240229")
 
     # RAG
-    chunk_size: int = Field(default=512)
-    chunk_overlap: int = Field(default=50)
+    chunk_size: int = Field(default=1024)
+    chunk_overlap: int = Field(default=100)
     top_k: int = Field(default=5)
 
     # UI

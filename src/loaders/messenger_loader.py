@@ -19,6 +19,10 @@ class MessengerLoader(BaseLoader):
     Messages have: sender_name, timestamp_ms, content, type, photos[], etc.
     """
 
+    # Metadata length limits to prevent chunk_size overflow
+    MAX_PARTICIPANTS_DISPLAY = 3
+    MAX_CHAT_NAME_LENGTH = 100
+
     def __init__(self, group_messages: bool = True, group_window_minutes: int = 30):
         """Initialize Messenger loader.
 
@@ -32,6 +36,32 @@ class MessengerLoader(BaseLoader):
 
     def supported_extensions(self) -> list[str]:
         return [".json"]
+
+    def _truncate_participants(self, participants: list[str]) -> str:
+        """Truncate participant list to avoid metadata overflow.
+
+        For group chats with many participants, storing all names in metadata
+        can exceed LlamaIndex's chunk_size limit. This method limits the
+        displayed names while preserving the total count.
+
+        Args:
+            participants: Full list of participant names
+
+        Returns:
+            Truncated string like "Alice, Bob, Carol (+7 others)"
+        """
+        if len(participants) <= self.MAX_PARTICIPANTS_DISPLAY:
+            return ", ".join(participants)
+
+        displayed = participants[: self.MAX_PARTICIPANTS_DISPLAY]
+        remaining = len(participants) - self.MAX_PARTICIPANTS_DISPLAY
+        return f"{', '.join(displayed)} (+{remaining} others)"
+
+    def _truncate_text(self, text: str, max_length: int) -> str:
+        """Truncate text to max length with ellipsis."""
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 3] + "..."
 
     def _parse_file(self, file_path: Path) -> Iterator[tuple[str, dict]]:
         """Parse Messenger JSON export file.
@@ -192,8 +222,11 @@ class MessengerLoader(BaseLoader):
             metadata = {
                 "date": msg["timestamp"].isoformat(),
                 "sender": msg["sender"],
-                "chat_name": chat_context["chat_name"],
-                "participants": ", ".join(chat_context["participants"]),
+                "chat_name": self._truncate_text(
+                    chat_context["chat_name"], self.MAX_CHAT_NAME_LENGTH
+                ),
+                "participants": self._truncate_participants(chat_context["participants"]),
+                "participant_count": len(chat_context["participants"]),
             }
             yield content, metadata
 
@@ -220,9 +253,12 @@ class MessengerLoader(BaseLoader):
         metadata = {
             "date": start_time.isoformat(),
             "sender": sender,
-            "chat_name": chat_context["chat_name"],
-            "participants": ", ".join(chat_context["participants"]),
+            "chat_name": self._truncate_text(
+                chat_context["chat_name"], self.MAX_CHAT_NAME_LENGTH
+            ),
+            "participants": self._truncate_participants(chat_context["participants"]),
             "message_count": len(messages),
+            "participant_count": len(chat_context["participants"]),
         }
 
         if start_time != end_time:
