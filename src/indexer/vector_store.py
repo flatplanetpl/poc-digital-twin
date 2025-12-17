@@ -2,6 +2,10 @@
 
 FR-P0-3: Source of Truth & Priority Rules - priority-weighted search
 FR-P0-5: Forget / Right to Be Forgotten - per-document deletion
+
+Supports two-tier metadata:
+- Light metadata: stored in Qdrant (for filtering/search)
+- Heavy metadata: stored in SQLite chunk_details (for display)
 """
 
 from llama_index.core import Settings as LlamaSettings
@@ -15,6 +19,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 from src.config import settings
+from src.storage.document_registry import DocumentRegistry
 
 
 class VectorStore:
@@ -86,6 +91,70 @@ class VectorStore:
 
         self._index = VectorStoreIndex.from_documents(
             documents,
+            storage_context=storage_context,
+            show_progress=True,
+        )
+
+        return len(documents)
+
+    def add_documents_optimized(
+        self,
+        documents: list[Document],
+        doc_registry: DocumentRegistry | None = None,
+    ) -> int:
+        """Add documents with two-tier metadata optimization.
+
+        Splits metadata into light (Qdrant) and heavy (SQLite) parts.
+        Light metadata stays in chunks for fast filtering.
+        Heavy metadata is stored in chunk_details for later retrieval.
+
+        Args:
+            documents: List of LlamaIndex Document objects
+            doc_registry: DocumentRegistry instance for heavy metadata storage.
+                         If None, creates a new instance.
+
+        Returns:
+            Number of documents added
+        """
+        if not documents:
+            return 0
+
+        registry = doc_registry or DocumentRegistry()
+
+        # Split metadata and collect heavy parts for batch storage
+        heavy_batch = []
+        optimized_docs = []
+
+        for doc in documents:
+            # Split metadata into light and heavy parts
+            light, heavy = registry.split_metadata(doc.metadata)
+
+            # Create new document with only light metadata
+            optimized_doc = Document(
+                text=doc.text,
+                metadata=light,
+                excluded_llm_metadata_keys=doc.excluded_llm_metadata_keys,
+                excluded_embed_metadata_keys=doc.excluded_embed_metadata_keys,
+            )
+            optimized_docs.append(optimized_doc)
+
+            # Collect heavy metadata for batch storage
+            if heavy and "document_id" in heavy:
+                source_type = light.get("source_type", "unknown")
+                heavy_batch.append((heavy["document_id"], source_type, heavy))
+
+        # Store heavy metadata in SQLite
+        if heavy_batch:
+            registry.store_chunk_details_batch(heavy_batch)
+            print(f"  Stored {len(heavy_batch)} chunk details in registry")
+
+        # Create index from optimized documents
+        storage_context = StorageContext.from_defaults(
+            vector_store=self.vector_store
+        )
+
+        self._index = VectorStoreIndex.from_documents(
+            optimized_docs,
             storage_context=storage_context,
             show_progress=True,
         )
@@ -171,6 +240,55 @@ class VectorStore:
                 "metadata": node.metadata,
                 "score": node.score,
             })
+
+        return results
+
+    def search_with_full_metadata(
+        self,
+        query: str,
+        top_k: int | None = None,
+        filters: dict | None = None,
+        doc_registry: DocumentRegistry | None = None,
+    ) -> list[dict]:
+        """Search and merge with heavy metadata from chunk_details.
+
+        Args:
+            query: Search query text
+            top_k: Number of results to return
+            filters: Metadata filters
+            doc_registry: DocumentRegistry instance. If None, creates new one.
+
+        Returns:
+            List of results with complete (light + heavy) metadata
+        """
+        # First do normal search
+        results = self.search(query, top_k=top_k, filters=filters)
+
+        if not results:
+            return results
+
+        # Get document_ids from results
+        doc_ids = [
+            r["metadata"].get("document_id")
+            for r in results
+            if r["metadata"].get("document_id")
+        ]
+
+        if not doc_ids:
+            return results
+
+        # Fetch heavy metadata from registry
+        registry = doc_registry or DocumentRegistry()
+        heavy_batch = registry.get_chunk_details_batch(doc_ids)
+
+        # Merge light + heavy metadata
+        for result in results:
+            doc_id = result["metadata"].get("document_id")
+            if doc_id and doc_id in heavy_batch:
+                result["metadata"] = registry.merge_metadata(
+                    result["metadata"],
+                    heavy_batch[doc_id],
+                )
 
         return results
 

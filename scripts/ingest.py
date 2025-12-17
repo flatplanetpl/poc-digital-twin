@@ -22,6 +22,7 @@ from src.loaders import (
     AdsInterestsLoader,
 )
 from src.storage.contact_registry import ContactRegistry
+from src.storage.document_registry import DocumentRegistry
 
 
 def parse_args():
@@ -59,6 +60,12 @@ def parse_args():
         "--stats",
         action="store_true",
         help="Show index statistics and exit",
+    )
+
+    parser.add_argument(
+        "--optimize",
+        action="store_true",
+        help="Use two-tier metadata optimization (reduces chunk metadata size)",
     )
 
     return parser.parse_args()
@@ -173,7 +180,13 @@ def main():
     # Index documents
     print(f"\nIndexing {len(all_documents)} documents...")
     try:
-        count = vector_store.add_documents(all_documents)
+        if args.optimize:
+            print("Using two-tier metadata optimization...")
+            doc_registry = DocumentRegistry()
+            doc_registry.clear_chunk_details()  # Clear old details on re-index
+            count = vector_store.add_documents_optimized(all_documents, doc_registry)
+        else:
+            count = vector_store.add_documents(all_documents)
         print(f"Successfully indexed {count} documents.")
     except Exception as e:
         print(f"Error indexing documents: {e}")
@@ -191,6 +204,14 @@ def main():
         print(f"  Total messages tracked: {contact_stats['total_messages']}")
         if contact_stats["by_source"]:
             print(f"  By source: {contact_stats['by_source']}")
+
+    # Show chunk details stats if optimization was used
+    if args.optimize:
+        chunk_stats = doc_registry.get_chunk_details_stats()
+        print(f"\nChunk Details Registry:")
+        print(f"  Total chunks with heavy metadata: {chunk_stats['total_chunks']}")
+        if chunk_stats["by_source"]:
+            print(f"  By source: {chunk_stats['by_source']}")
 
 
 if __name__ == "__main__":

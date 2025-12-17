@@ -115,7 +115,7 @@ class BaseLoader(ABC):
             "document_id": doc_id,
             "source_type": self.source_type,
             "filename": file_path.name,
-            "file_path": str(file_path.absolute()),
+            "file_path": f"{file_path.parent.name}/{file_path.name}",
             "indexed_at": datetime.now().isoformat(),
             # Priority fields (FR-P0-3)
             "is_pinned": False,

@@ -4,6 +4,10 @@ Provides document tracking infrastructure for:
 - FR-P0-5: Forget / Right to Be Forgotten (per-document deletion)
 - FR-P2-5: Re-index & Migration (embedding model tracking)
 - FR-P3-1: Ingestion Monitoring (document counts)
+
+Also provides two-tier metadata storage:
+- Light metadata: stored in Qdrant chunks (for filtering/search)
+- Heavy metadata: stored in SQLite chunk_details table (for display)
 """
 
 import hashlib
@@ -19,6 +23,50 @@ from typing import Iterator, Literal
 from pydantic import BaseModel, Field
 
 from src.config import settings
+
+
+# Fields that should stay in Qdrant (essential for filtering/search)
+LIGHT_METADATA_FIELDS = {
+    "document_id",       # Link to chunk_details
+    "source_type",       # Filter by source
+    "date",              # Temporal filtering
+    "date_end",          # Date range end
+    "sender",            # Person filtering
+    "document_category", # Priority weighting
+    "contact_name",      # Contact filtering
+    "normalized_name",   # Fuzzy matching
+    "is_group_chat",     # Chat type filtering
+    "thread_type",       # Thread type filtering
+    "message_count",     # Stats (small int)
+    "participant_count", # Stats (small int)
+}
+
+# Fields to move to chunk_details (heavy/rarely filtered)
+HEAVY_METADATA_FIELDS = {
+    "file_path",         # Debug only
+    "filename",          # Redundant
+    "indexed_at",        # Rarely needed at query time
+    "is_pinned",         # User preference (updatable)
+    "is_approved",       # User preference (updatable)
+    "family_members",    # Heavy JSON from ProfileLoader
+    "work_history",      # Heavy JSON from ProfileLoader
+    "education",         # Heavy JSON from ProfileLoader
+    "shared_links",      # URLs from MessengerLoader
+    "media_types",       # Media info
+    "has_media",         # Media flag
+    "reaction_count",    # Stats
+    "chat_name",         # Can be long
+    "participants",      # Can be long (truncated list)
+    "search_query",      # From SearchHistoryLoader
+    # Profile fields
+    "full_name", "first_name", "last_name", "email", "phone",
+    "birthday", "gender", "city", "hometown",
+    "relationship_status", "partner", "username", "registration_date",
+    # Location fields
+    "latitude", "longitude", "cities", "regions", "location_type", "record_count",
+    # Contact fields
+    "contact_type", "friendship_date",
+}
 
 
 class DocumentStatus(str, Enum):
@@ -135,6 +183,31 @@ class DocumentRegistry:
                     first_used_at TEXT NOT NULL,
                     is_current INTEGER NOT NULL DEFAULT 0
                 )
+            """)
+
+            # Chunk-level heavy metadata storage (two-tier metadata system)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chunk_details (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    document_id TEXT NOT NULL UNIQUE,
+                    source_type TEXT NOT NULL,
+                    file_path TEXT,
+                    indexed_at TEXT,
+                    is_pinned BOOLEAN DEFAULT FALSE,
+                    is_approved BOOLEAN DEFAULT FALSE,
+                    metadata_json TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_details_document_id
+                ON chunk_details(document_id)
+            """)
+
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chunk_details_source_type
+                ON chunk_details(source_type)
             """)
 
     @staticmethod
@@ -525,3 +598,334 @@ class DocumentRegistry:
             status=DocumentStatus(row["status"]),
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
         )
+
+    # =========================================================================
+    # Two-tier metadata methods (chunk_details table)
+    # =========================================================================
+
+    @staticmethod
+    def split_metadata(metadata: dict) -> tuple[dict, dict]:
+        """Split metadata into light (Qdrant) and heavy (SQLite) parts.
+
+        Args:
+            metadata: Full metadata dictionary from loader
+
+        Returns:
+            Tuple of (light_metadata, heavy_metadata)
+
+        Example:
+            light, heavy = registry.split_metadata(doc.metadata)
+            # Store light in Qdrant, heavy in chunk_details
+        """
+        light = {}
+        heavy = {}
+
+        for key, value in metadata.items():
+            if key in LIGHT_METADATA_FIELDS:
+                light[key] = value
+            elif key in HEAVY_METADATA_FIELDS:
+                heavy[key] = value
+            else:
+                # Unknown field - put in light if small, heavy if large
+                value_str = str(value)
+                if len(value_str) > 100:
+                    heavy[key] = value
+                else:
+                    light[key] = value
+
+        # Ensure document_id is in both (needed for linking)
+        if "document_id" in metadata:
+            light["document_id"] = metadata["document_id"]
+            heavy["document_id"] = metadata["document_id"]
+
+        return light, heavy
+
+    def store_chunk_details(
+        self,
+        document_id: str,
+        source_type: str,
+        heavy_metadata: dict,
+    ) -> None:
+        """Store heavy metadata for a chunk.
+
+        Args:
+            document_id: Unique chunk identifier (links to Qdrant)
+            source_type: Document source type
+            heavy_metadata: Heavy metadata to store
+        """
+        now = datetime.now().isoformat()
+
+        # Extract known fields
+        file_path = heavy_metadata.pop("file_path", None)
+        indexed_at = heavy_metadata.pop("indexed_at", None)
+        is_pinned = heavy_metadata.pop("is_pinned", False)
+        is_approved = heavy_metadata.pop("is_approved", False)
+        heavy_metadata.pop("document_id", None)
+
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO chunk_details
+                (document_id, source_type, file_path, indexed_at, is_pinned, is_approved, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(document_id) DO UPDATE SET
+                    source_type = excluded.source_type,
+                    file_path = excluded.file_path,
+                    indexed_at = excluded.indexed_at,
+                    is_pinned = excluded.is_pinned,
+                    is_approved = excluded.is_approved,
+                    metadata_json = excluded.metadata_json
+                """,
+                (
+                    document_id,
+                    source_type,
+                    file_path,
+                    indexed_at,
+                    is_pinned,
+                    is_approved,
+                    json.dumps(heavy_metadata, ensure_ascii=False) if heavy_metadata else None,
+                    now,
+                ),
+            )
+
+    def store_chunk_details_batch(
+        self,
+        chunks: list[tuple[str, str, dict]],
+    ) -> int:
+        """Store heavy metadata for multiple chunks efficiently.
+
+        Args:
+            chunks: List of (document_id, source_type, heavy_metadata) tuples
+
+        Returns:
+            Number of chunks stored
+        """
+        now = datetime.now().isoformat()
+        count = 0
+
+        with self._get_connection() as conn:
+            for document_id, source_type, heavy_metadata in chunks:
+                heavy = dict(heavy_metadata)  # Copy to avoid mutation
+                file_path = heavy.pop("file_path", None)
+                indexed_at = heavy.pop("indexed_at", None)
+                is_pinned = heavy.pop("is_pinned", False)
+                is_approved = heavy.pop("is_approved", False)
+                heavy.pop("document_id", None)
+
+                conn.execute(
+                    """
+                    INSERT INTO chunk_details
+                    (document_id, source_type, file_path, indexed_at, is_pinned, is_approved, metadata_json, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(document_id) DO UPDATE SET
+                        source_type = excluded.source_type,
+                        file_path = excluded.file_path,
+                        indexed_at = excluded.indexed_at,
+                        is_pinned = excluded.is_pinned,
+                        is_approved = excluded.is_approved,
+                        metadata_json = excluded.metadata_json
+                    """,
+                    (
+                        document_id,
+                        source_type,
+                        file_path,
+                        indexed_at,
+                        is_pinned,
+                        is_approved,
+                        json.dumps(heavy, ensure_ascii=False) if heavy else None,
+                        now,
+                    ),
+                )
+                count += 1
+
+        return count
+
+    def get_chunk_details(self, document_id: str) -> dict | None:
+        """Get heavy metadata for a chunk.
+
+        Args:
+            document_id: Chunk identifier
+
+        Returns:
+            Heavy metadata dict or None if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM chunk_details WHERE document_id = ?",
+                (document_id,),
+            )
+            row = cursor.fetchone()
+
+            if row:
+                result = {
+                    "document_id": row["document_id"],
+                    "source_type": row["source_type"],
+                    "is_pinned": bool(row["is_pinned"]),
+                    "is_approved": bool(row["is_approved"]),
+                }
+                if row["file_path"]:
+                    result["file_path"] = row["file_path"]
+                if row["indexed_at"]:
+                    result["indexed_at"] = row["indexed_at"]
+                if row["metadata_json"]:
+                    result.update(json.loads(row["metadata_json"]))
+                return result
+            return None
+
+    def get_chunk_details_batch(self, document_ids: list[str]) -> dict[str, dict]:
+        """Get heavy metadata for multiple chunks.
+
+        Args:
+            document_ids: List of chunk identifiers
+
+        Returns:
+            Dictionary mapping document_id to heavy metadata
+        """
+        if not document_ids:
+            return {}
+
+        placeholders = ",".join("?" * len(document_ids))
+
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                f"SELECT * FROM chunk_details WHERE document_id IN ({placeholders})",
+                document_ids,
+            )
+
+            result = {}
+            for row in cursor.fetchall():
+                details = {
+                    "document_id": row["document_id"],
+                    "source_type": row["source_type"],
+                    "is_pinned": bool(row["is_pinned"]),
+                    "is_approved": bool(row["is_approved"]),
+                }
+                if row["file_path"]:
+                    details["file_path"] = row["file_path"]
+                if row["indexed_at"]:
+                    details["indexed_at"] = row["indexed_at"]
+                if row["metadata_json"]:
+                    details.update(json.loads(row["metadata_json"]))
+                result[row["document_id"]] = details
+
+            return result
+
+    def merge_metadata(
+        self,
+        light_metadata: dict,
+        heavy_metadata: dict | None,
+    ) -> dict:
+        """Merge light and heavy metadata into complete metadata.
+
+        Args:
+            light_metadata: Light metadata from Qdrant
+            heavy_metadata: Heavy metadata from chunk_details (or None)
+
+        Returns:
+            Complete merged metadata dict
+        """
+        result = dict(light_metadata)
+        if heavy_metadata:
+            result.update(heavy_metadata)
+        return result
+
+    def update_chunk_pinned(self, document_id: str, is_pinned: bool) -> bool:
+        """Update pinned status for a chunk.
+
+        Args:
+            document_id: Chunk identifier
+            is_pinned: New pinned status
+
+        Returns:
+            True if updated, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE chunk_details SET is_pinned = ? WHERE document_id = ?",
+                (is_pinned, document_id),
+            )
+            return cursor.rowcount > 0
+
+    def update_chunk_approved(self, document_id: str, is_approved: bool) -> bool:
+        """Update approved status for a chunk.
+
+        Args:
+            document_id: Chunk identifier
+            is_approved: New approved status
+
+        Returns:
+            True if updated, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE chunk_details SET is_approved = ? WHERE document_id = ?",
+                (is_approved, document_id),
+            )
+            return cursor.rowcount > 0
+
+    def delete_chunk_details(self, document_id: str) -> bool:
+        """Delete heavy metadata for a chunk.
+
+        Args:
+            document_id: Chunk identifier
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "DELETE FROM chunk_details WHERE document_id = ?",
+                (document_id,),
+            )
+            return cursor.rowcount > 0
+
+    def clear_chunk_details(self, source_type: str | None = None) -> int:
+        """Clear chunk details, optionally by source type.
+
+        Args:
+            source_type: If provided, only clear this source type
+
+        Returns:
+            Number of records deleted
+        """
+        with self._get_connection() as conn:
+            if source_type:
+                cursor = conn.execute(
+                    "DELETE FROM chunk_details WHERE source_type = ?",
+                    (source_type,),
+                )
+            else:
+                cursor = conn.execute("DELETE FROM chunk_details")
+            return cursor.rowcount
+
+    def get_chunk_details_stats(self) -> dict:
+        """Get chunk details statistics.
+
+        Returns:
+            Dictionary with statistics
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("SELECT COUNT(*) as total FROM chunk_details")
+            total = cursor.fetchone()["total"]
+
+            cursor = conn.execute(
+                "SELECT source_type, COUNT(*) as count FROM chunk_details GROUP BY source_type"
+            )
+            by_source = {row["source_type"]: row["count"] for row in cursor.fetchall()}
+
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM chunk_details WHERE is_pinned = TRUE"
+            )
+            pinned = cursor.fetchone()["count"]
+
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM chunk_details WHERE is_approved = TRUE"
+            )
+            approved = cursor.fetchone()["count"]
+
+            return {
+                "total_chunks": total,
+                "by_source": by_source,
+                "pinned_count": pinned,
+                "approved_count": approved,
+            }
