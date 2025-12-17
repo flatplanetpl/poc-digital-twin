@@ -15,12 +15,13 @@ class GPT4AllLlamaIndex(CustomLLM):
     """LlamaIndex wrapper for GPT4All."""
 
     model_name: str = settings.effective_gpt4all_model
+    device: str = settings.gpt4all_device
     _model: GPT4All | None = None
 
     @property
     def model(self) -> GPT4All:
         if self._model is None:
-            self._model = GPT4All(self.model_name)
+            self._model = GPT4All(self.model_name, device=self.device)
         return self._model
 
     @property
@@ -61,7 +62,10 @@ class GPT4AllProvider(BaseLLM):
     @property
     def model(self) -> GPT4All:
         if self._model is None:
-            self._model = GPT4All(settings.effective_gpt4all_model)
+            self._model = GPT4All(
+                settings.effective_gpt4all_model,
+                device=settings.gpt4all_device
+            )
         return self._model
 
     def get_llama_index_llm(self):
@@ -79,7 +83,7 @@ class GPT4AllProvider(BaseLLM):
     def is_available(self) -> bool:
         try:
             # Check if model file exists or can be downloaded
-            GPT4All(settings.effective_gpt4all_model)
+            GPT4All(settings.effective_gpt4all_model, device=settings.gpt4all_device)
             return True
         except Exception:
             return False

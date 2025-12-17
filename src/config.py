@@ -110,6 +110,10 @@ class Settings(BaseSettings):
 
     # GPT4All
     gpt4all_model: str = Field(default="mistral-7b-instruct-v0.1.Q4_0.gguf")
+    gpt4all_device: Literal["cpu", "gpu"] = Field(
+        default="cpu",
+        description="Device for GPT4All inference (cpu or gpu for CUDA)"
+    )
 
     # OpenAI
     openai_api_key: str = Field(default="")
