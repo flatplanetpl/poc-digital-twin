@@ -70,3 +70,10 @@ Thumbs.db
 # GPT4All models (large files)
 *.gguf
 *.bin
+
+# Claude Code
+.claude/
+
+# Qdrant local binary
+qdrant.exe
+.qdrant-initialized
