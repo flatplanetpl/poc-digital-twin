@@ -195,7 +195,6 @@ class VectorStore:
         return {
             "exists": True,
             "points_count": info.points_count,
-            "vectors_count": info.vectors_count,
             "status": info.status.value,
         }
 
