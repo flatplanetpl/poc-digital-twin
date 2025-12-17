@@ -18,6 +18,7 @@
 ---
 
 ### Zaawansowane
+- [[Import-danych-Facebook|📱 Import danych Facebook]]
 - [[Pipelines|🔄 Pipelines]]
 - [[Scenariusze-użycia|💡 Scenariusze użycia]]
 - [[Integracje|🔌 Integracje]]

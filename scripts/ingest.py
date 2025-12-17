@@ -10,7 +10,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config import settings
 from src.indexer import VectorStore
-from src.loaders import EmailLoader, MessengerLoader, TextLoader, WhatsAppLoader
+from src.loaders import (
+    EmailLoader,
+    MessengerLoader,
+    TextLoader,
+    WhatsAppLoader,
+    ProfileLoader,
+    ContactsLoader,
+    LocationLoader,
+    SearchHistoryLoader,
+    AdsInterestsLoader,
+)
+from src.storage.contact_registry import ContactRegistry
 
 
 def parse_args():
@@ -29,9 +40,13 @@ def parse_args():
     parser.add_argument(
         "--types",
         nargs="+",
-        choices=["text", "email", "whatsapp", "messenger", "all"],
+        choices=[
+            "text", "email", "whatsapp", "messenger",
+            "profile", "contacts", "location", "search", "interests",
+            "all", "facebook"
+        ],
         default=["all"],
-        help="Types of data to ingest (default: all)",
+        help="Types of data to ingest. 'facebook' includes all Messenger-related types. (default: all)",
     )
 
     parser.add_argument(
@@ -49,13 +64,32 @@ def parse_args():
     return parser.parse_args()
 
 
-def get_loaders(types: list[str]) -> list:
-    """Get loader instances based on requested types."""
+def get_loaders(types: list[str], contact_registry: ContactRegistry | None = None) -> list:
+    """Get loader instances based on requested types.
+
+    Args:
+        types: List of loader types to instantiate
+        contact_registry: Optional contact registry for Messenger loader integration
+
+    Returns:
+        List of loader instances
+    """
     loaders = []
 
+    # Expand 'all' to include all types
     if "all" in types:
-        types = ["text", "email", "whatsapp", "messenger"]
+        types = [
+            "text", "email", "whatsapp", "messenger",
+            "profile", "contacts", "location", "search", "interests"
+        ]
 
+    # Expand 'facebook' to include all Facebook/Messenger-related types
+    if "facebook" in types:
+        types = list(set(types) - {"facebook"})
+        types.extend(["messenger", "profile", "contacts", "location", "search", "interests"])
+        types = list(set(types))  # Remove duplicates
+
+    # Original loaders
     if "text" in types:
         loaders.append(TextLoader())
     if "email" in types:
@@ -63,7 +97,19 @@ def get_loaders(types: list[str]) -> list:
     if "whatsapp" in types:
         loaders.append(WhatsAppLoader())
     if "messenger" in types:
-        loaders.append(MessengerLoader())
+        loaders.append(MessengerLoader(contact_registry=contact_registry))
+
+    # New Facebook/Messenger data loaders
+    if "profile" in types:
+        loaders.append(ProfileLoader())
+    if "contacts" in types:
+        loaders.append(ContactsLoader())
+    if "location" in types:
+        loaders.append(LocationLoader())
+    if "search" in types:
+        loaders.append(SearchHistoryLoader())
+    if "interests" in types:
+        loaders.append(AdsInterestsLoader())
 
     return loaders
 
@@ -104,9 +150,13 @@ def main():
         print(f"Error: Source directory not found: {args.source}")
         sys.exit(1)
 
+    # Initialize contact registry for tracking contacts across sources
+    contact_registry = ContactRegistry()
+    print(f"Contact registry initialized.")
+
     # Load documents
     print(f"\nLoading data from: {args.source}")
-    loaders = get_loaders(args.types)
+    loaders = get_loaders(args.types, contact_registry=contact_registry)
 
     all_documents = []
     for loader in loaders:
@@ -132,6 +182,15 @@ def main():
     # Show final stats
     stats = vector_store.get_stats()
     print(f"\nIndex now contains {stats['points_count']} vectors.")
+
+    # Show contact registry stats if contacts were indexed
+    contact_stats = contact_registry.get_stats()
+    if contact_stats["total_contacts"] > 0:
+        print(f"\nContact Registry:")
+        print(f"  Total contacts: {contact_stats['total_contacts']}")
+        print(f"  Total messages tracked: {contact_stats['total_messages']}")
+        if contact_stats["by_source"]:
+            print(f"  By source: {contact_stats['by_source']}")
 
 
 if __name__ == "__main__":

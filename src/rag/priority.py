@@ -20,10 +20,15 @@ class DocumentType(IntEnum):
     Higher values = more authoritative source.
     """
 
+    PROFILE = 120  # User's own profile information (highest priority for self-context)
     DECISION = 100  # Explicit decisions, approved documents
     NOTE = 70  # Personal notes, markdown files
     EMAIL = 50  # Email correspondence
+    CONTACT = 40  # Contact/relationship information
     CONVERSATION = 30  # WhatsApp, Messenger chats
+    INTERESTS = 25  # User interests from ads data
+    LOCATION = 20  # Location history
+    SEARCH_HISTORY = 10  # Search history (lowest priority)
 
 
 class ApprovalStatus(IntEnum):
@@ -39,13 +44,22 @@ class ApprovalStatus(IntEnum):
 
 # Mapping from source_type/category to DocumentType
 CATEGORY_WEIGHTS: dict[str, DocumentType] = {
+    # High priority
+    "profile": DocumentType.PROFILE,
     "decision": DocumentType.DECISION,
+    # Medium priority
     "note": DocumentType.NOTE,
     "text": DocumentType.NOTE,
     "email": DocumentType.EMAIL,
+    "contact": DocumentType.CONTACT,
+    "contacts": DocumentType.CONTACT,
+    # Lower priority
     "whatsapp": DocumentType.CONVERSATION,
     "messenger": DocumentType.CONVERSATION,
     "conversation": DocumentType.CONVERSATION,
+    "interests": DocumentType.INTERESTS,
+    "location": DocumentType.LOCATION,
+    "search_history": DocumentType.SEARCH_HISTORY,
 }
 
 

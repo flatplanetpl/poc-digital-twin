@@ -9,7 +9,10 @@ from typing import Iterator, Literal
 from llama_index.core.schema import Document
 
 # Document categories for priority system (FR-P0-3)
-DocumentCategory = Literal["decision", "note", "email", "conversation"]
+DocumentCategory = Literal[
+    "decision", "note", "email", "conversation",
+    "profile", "contact", "location", "interests", "search_history"
+]
 
 
 class BaseLoader(ABC):
@@ -28,6 +31,11 @@ class BaseLoader(ABC):
         "email": "email",
         "whatsapp": "conversation",
         "messenger": "conversation",
+        "profile": "profile",
+        "contacts": "contact",
+        "location": "location",
+        "interests": "interests",
+        "search_history": "search_history",
     }
 
     def __init__(self, source_type: str):

@@ -7,46 +7,49 @@ Szczegółowy opis przepływu danych przez system Digital Twin — od pliku źr�
 ## Przegląd architektury
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        DIGITAL TWIN                                 │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  ╔════════════════════╗       ╔════════════════════╗               │
-│  ║  PIPELINE INDEXING ║       ║  PIPELINE QUERY    ║               │
-│  ╠════════════════════╣       ╠════════════════════╣               │
-│  ║                    ║       ║                    ║               │
-│  ║  Files → Loader    ║       ║  Question          ║               │
-│  ║       ↓            ║       ║       ↓            ║               │
-│  ║  Chunking          ║       ║  Embedding         ║               │
-│  ║       ↓            ║       ║       ↓            ║               │
-│  ║  Metadata          ║       ║  Retrieval         ║               │
-│  ║       ↓            ║       ║       ↓            ║               │
-│  ║  Embedding         ║       ║  Priority Rank     ║               │
-│  ║       ↓            ║       ║       ↓            ║               │
-│  ║  Qdrant Store      ║       ║  Context Build     ║               │
-│  ║       ↓            ║       ║       ↓            ║               │
-│  ║  Registry          ║       ║  LLM Generate      ║               │
-│  ║                    ║       ║       ↓            ║               │
-│  ╚════════════════════╝       ║  Citation Extract  ║               │
-│                               ║       ↓            ║               │
-│                               ║  Response          ║               │
-│                               ╚════════════════════╝               │
-│                                                                     │
-│  ╔════════════════════╗                                            │
-│  ║  PIPELINE DELETE   ║                                            │
-│  ╠════════════════════╣                                            │
-│  ║  Request → Lookup  ║                                            │
-│  ║       ↓            ║                                            │
-│  ║  Delete Vectors    ║                                            │
-│  ║       ↓            ║                                            │
-│  ║  Purge History     ║                                            │
-│  ║       ↓            ║                                            │
-│  ║  Update Registry   ║                                            │
-│  ║       ↓            ║                                            │
-│  ║  Audit Log         ║                                            │
-│  ╚════════════════════╝                                            │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                              DIGITAL TWIN                                      │
+├───────────────────────────────────────────────────────────────────────────────┤
+│                                                                               │
+│  ╔════════════════════╗       ╔════════════════════╗                          │
+│  ║  PIPELINE INDEXING ║       ║  PIPELINE QUERY    ║                          │
+│  ╠════════════════════╣       ╠════════════════════╣                          │
+│  ║                    ║       ║                    ║                          │
+│  ║  Files → Loader    ║       ║  Question          ║                          │
+│  ║  (9 loaders)       ║       ║       ↓            ║                          │
+│  ║       ↓            ║       ║  QueryPreprocessor ║   ← NEW: filter extract  │
+│  ║  Chunking          ║       ║       ↓            ║                          │
+│  ║       ↓            ║       ║  Embedding         ║                          │
+│  ║  Metadata          ║       ║       ↓            ║                          │
+│  ║       ↓            ║       ║  Retrieval +       ║                          │
+│  ║  Embedding         ║       ║  MetadataFilters   ║   ← NEW: person/date     │
+│  ║       ↓            ║       ║       ↓            ║                          │
+│  ║  Qdrant Store      ║       ║  Priority Rank     ║                          │
+│  ║       ↓            ║       ║       ↓            ║                          │
+│  ║  ContactRegistry   ║   ←   ║  Context Build     ║                          │
+│  ║                    ║   │   ║       ↓            ║                          │
+│  ╚════════════════════╝   │   ║  LLM Generate      ║                          │
+│                           │   ║       ↓            ║                          │
+│  ╔════════════════════╗   │   ║  Citation Extract  ║                          │
+│  ║  CONTACT GRAPH     ║◄──┘   ║       ↓            ║                          │
+│  ╠════════════════════╣       ║  Response          ║                          │
+│  ║  ContactRegistry   ║       ╚════════════════════╝                          │
+│  ║       ↓            ║                                                       │
+│  ║  Relationships     ║       ╔════════════════════╗                          │
+│  ║       ↓            ║       ║  PIPELINE DELETE   ║                          │
+│  ║  Interaction Score ║       ╠════════════════════╣                          │
+│  ║       ↓            ║       ║  Request → Lookup  ║                          │
+│  ║  Topic Analysis    ║       ║       ↓            ║                          │
+│  ╚════════════════════╝       ║  Delete Vectors    ║                          │
+│                               ║       ↓            ║                          │
+│                               ║  Purge History     ║                          │
+│                               ║       ↓            ║                          │
+│                               ║  Update Registry   ║                          │
+│                               ║       ↓            ║                          │
+│                               ║  Audit Log         ║                          │
+│                               ╚════════════════════╝                          │
+│                                                                               │
+└───────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -108,7 +111,12 @@ class BaseLoader(ABC):
 | `TextLoader` | .txt, .md | Bezpośredni odczyt + frontmatter |
 | `EmailLoader` | .eml, .mbox | `email.parser` + nagłówki |
 | `WhatsAppLoader` | .txt | Regex na format eksportu |
-| `MessengerLoader` | .json | JSON Facebook export |
+| `MessengerLoader` | .json | JSON Facebook export + thread detection |
+| `ProfileLoader` | .json | Profil użytkownika Facebook |
+| `ContactsLoader` | .json | Lista znajomych + kontakty telefonu |
+| `LocationLoader` | .json | Historia lokalizacji |
+| `SearchHistoryLoader` | .json | Historia wyszukiwania |
+| `AdsInterestsLoader` | .json | Zainteresowania reklamowe |
 
 ### Krok 2: Chunking (Podział na fragmenty)
 
@@ -244,42 +252,88 @@ Pipeline zapytania przekształca pytanie użytkownika w uziemioną odpowiedź z 
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  QUESTION   │────►│  EMBEDDING  │────►│   QDRANT    │────►│  PRIORITY   │
-│             │     │             │     │   SEARCH    │     │   RANKING   │
-│ "Kiedy..."  │     │ all-MiniLM  │     │ top_k=50    │     │ sim*0.7 +   │
-│             │     │ 384 dims    │     │             │     │ pri*0.3     │
+│  QUESTION   │────►│   QUERY     │────►│  EMBEDDING  │────►│   QDRANT    │
+│             │     │ PREPROCESSOR│     │             │     │   SEARCH    │
+│ "Co Ewa     │     │             │     │ all-MiniLM  │     │             │
+│  mówiła?"   │     │ extract:    │     │ 384 dims    │     │ + metadata  │
+│             │     │ - person    │     │             │     │   filters   │
+│             │     │ - date      │     │             │     │             │
+│             │     │ - source    │     │             │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
                                                                    │
                                                                    ▼
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  RESPONSE   │◄────│  CITATION   │◄────│    LLM      │◄────│  CONTEXT    │
-│             │     │  EXTRACT    │     │  GENERATE   │     │   BUILD     │
+│  RESPONSE   │◄────│  CITATION   │◄────│    LLM      │◄────│  PRIORITY   │
+│             │     │  EXTRACT    │     │  GENERATE   │     │   RANKING   │
 │ answer +    │     │             │     │             │     │             │
-│ citations + │     │ [Source:...]│     │ GPT4All /   │     │ prompt +    │
-│ explanation │     │             │     │ OpenAI      │     │ fragments   │
+│ citations + │     │ [Source:...]│     │ GPT4All /   │     │ sim*0.7 +   │
+│ explanation │     │             │     │ OpenAI      │     │ pri*0.3     │
+│ + filters   │     │             │     │             │     │             │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
-### Krok 1: Query Embedding
+### Krok 1: Query Preprocessing (NEW)
+
+```python
+# src/rag/query_preprocessor.py
+
+class QueryPreprocessor:
+    """Ekstrakcja filtrów z języka naturalnego."""
+
+    PERSON_PATTERNS = [
+        r"(?:from|by|with|od|z)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)",
+        r"(?:powiedział|napisał|wspomniał)\s+([A-Z][a-z]+)",
+    ]
+
+    DATE_PATTERNS = [
+        (r"(?:in|w)\s+(\w+)\s+(\d{4})", "month_year"),
+        (r"(?:last|w zeszłym)\s+(week|month|year|tygodniu|miesiącu|roku)", "relative"),
+    ]
+
+    def preprocess(self, query: str) -> PreprocessedQuery:
+        """Wyciągnij filtry z zapytania."""
+        return PreprocessedQuery(
+            clean_query="co mówiła?",        # zapytanie bez filtrów
+            person_filter="Ewa",              # wyciągnięta osoba
+            date_range=(start, end),          # zakres dat
+            source_filter="messenger",        # typ źródła
+            extracted_filters={"person": "Ewa", ...},
+        )
+```
+
+**Przykłady:**
+- `"Co Ewa mówiła o wakacjach?"` → `person_filter="Ewa"`
+- `"Maile od Jana w grudniu 2023"` → `person_filter="Jan"`, `date_range=(2023-12-01, 2023-12-31)`, `source_filter="email"`
+- `"Wiadomości z WhatsApp"` → `source_filter="whatsapp"`
+
+### Krok 2: Query Embedding
 
 ```python
 # Wektoryzacja pytania (ten sam model co dokumenty!)
-query_vector = embed_model.get_text_embedding(question)
+query_vector = embed_model.get_text_embedding(clean_question)
 ```
 
-### Krok 2: Vector Search (Qdrant)
+### Krok 3: Vector Search (Qdrant) + Metadata Filtering
 
 ```python
-# Wyszukiwanie najbardziej podobnych
+# Wyszukiwanie z filtrami metadanych
+from llama_index.core.vector_stores import MetadataFilters, MetadataFilter
+
+filters = MetadataFilters(filters=[
+    MetadataFilter(key="sender", value="Ewa", operator="contains"),
+    MetadataFilter(key="source_type", value="messenger", operator="eq"),
+])
+
 results = self.client.search(
     collection_name=self.collection_name,
     query_vector=query_vector,
     limit=fetch_k,  # Pobierz więcej dla re-rankingu
+    query_filter=filters,  # Qdrant metadata filter
     with_payload=True,
 )
 ```
 
-### Krok 3: Priority Re-ranking (FR-P0-3)
+### Krok 4: Priority Re-ranking (FR-P0-3)
 
 ```python
 # src/indexer/vector_store.py
@@ -311,7 +365,7 @@ def search_with_priority(self, query, top_k=5, fetch_k=50):
     return ranked[:top_k]
 ```
 
-### Krok 4: Context Building
+### Krok 5: Context Building
 
 ```python
 # src/rag/query_engine.py
@@ -335,7 +389,7 @@ Date: {node.metadata['date']}
     return "\n".join(context_parts)
 ```
 
-### Krok 5: LLM Generation
+### Krok 6: LLM Generation
 
 ```python
 # Grounded System Prompt
@@ -358,7 +412,7 @@ response = query_engine.query(question)
 answer = str(response)
 ```
 
-### Krok 6: Citation Extraction
+### Krok 7: Citation Extraction
 
 ```python
 # src/rag/citations.py
@@ -380,7 +434,7 @@ def extract_citations(source_nodes) -> list[Citation]:
     return citations
 ```
 
-### Krok 7: Response Assembly
+### Krok 8: Response Assembly
 
 ```python
 # Złożenie odpowiedzi
@@ -391,6 +445,7 @@ result = {
     "is_grounded": validate_grounding(answer, citations),
     "no_context_found": not citations,
     "query_time_ms": (time.time() - start) * 1000,
+    "filters_applied": {"person": "Ewa", "source": "messenger"},  # NEW
 }
 
 if include_explanation:
@@ -401,7 +456,94 @@ return result
 
 ---
 
-## Pipeline 3: Delete (Usuwanie)
+## Pipeline 3: Contact Graph (NEW)
+
+Pipeline Contact Graph buduje i analizuje relacje między kontaktami.
+
+### Diagram przepływu
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  INDEXED    │────►│  CONTACT    │────►│  CONTACT    │
+│  MESSAGES   │     │  REGISTRY   │     │   GRAPH     │
+│             │     │             │     │             │
+│ Messenger   │     │ SQLite DB   │     │ Relationships│
+│ WhatsApp    │     │ name, source│     │ Scores      │
+│ Email       │     │ stats       │     │ Topics      │
+└─────────────┘     └─────────────┘     └─────────────┘
+```
+
+### Krok 1: ContactRegistry (SQLite)
+
+```python
+# src/storage/contact_registry.py
+
+class ContactRegistry:
+    """Śledzenie kontaktów z różnych źródeł."""
+
+    def register_contact(self, name, source, timestamp, relationship_type, metadata):
+        """Zarejestruj/aktualizuj kontakt."""
+        # INSERT OR UPDATE INTO contacts
+        # Normalizuje imię: "Jan Kowalski" -> "jan kowalski"
+
+    def update_stats(self, name, source, message_count, timestamp):
+        """Aktualizuj statystyki interakcji."""
+        # UPDATE contact_interactions (monthly aggregation)
+
+    def get_top_contacts(self, limit=10, source=None):
+        """Zwróć najczęstsze kontakty."""
+        # ORDER BY total_interactions DESC
+```
+
+### Krok 2: ContactGraph Service
+
+```python
+# src/graph/contact_graph.py
+
+@dataclass
+class ContactRelationship:
+    contact_name: str
+    message_count: int
+    first_interaction: datetime
+    last_interaction: datetime
+    interaction_score: float  # 0-1
+    sources: list[str]  # ['messenger', 'whatsapp']
+
+class ContactGraph:
+    def build_from_registry(self) -> int:
+        """Zbuduj graf z ContactRegistry."""
+
+    def calculate_interaction_score(self, relationship) -> float:
+        """
+        score = 0.4 * frequency + 0.4 * recency + 0.2 * diversity
+        - frequency: messages_per_month / 100 (capped at 0.4)
+        - recency: 1 - (days_since_last / 365)
+        - diversity: 0.2 if multiple sources
+        """
+
+    def get_top_contacts(self, limit=10) -> list[ContactRelationship]:
+        """Zwróć najważniejsze relacje."""
+
+    def find_contacts_by_topic(self, topic: str, top_k=5) -> list[tuple[str, float]]:
+        """Znajdź kontakty rozmawiające o danym temacie."""
+```
+
+### Przykłady użycia
+
+```python
+# Kto jest moim najczęstszym rozmówcą?
+graph = ContactGraph(contact_registry, vector_store)
+top = graph.get_top_contacts(limit=5)
+# [ContactRelationship(name="Ewa", score=0.87), ...]
+
+# Z kim rozmawiam o pracy?
+work_contacts = graph.find_contacts_by_topic("praca projekt deadline")
+# [("Jan", 0.92), ("Maria", 0.78)]
+```
+
+---
+
+## Pipeline 4: Delete (Usuwanie)
 
 Pipeline usuwania gwarantuje kompletne usunięcie danych ze wszystkich systemów.
 

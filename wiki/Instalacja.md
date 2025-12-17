@@ -170,12 +170,25 @@ cp ~/Mail/Archive/*.eml data/emails/
 | E-maile | `.eml`, `.mbox` | `data/emails/` |
 | WhatsApp | `.txt` (eksport) | `data/whatsapp/` |
 | Messenger | `.json` (eksport FB) | `data/messenger/` |
+| Profil Facebook | `.json` | `data/messenger/` |
+| Kontakty FB | `.json` | `data/messenger/` |
+| Lokalizacje | `.json` | `data/messenger/` |
+| Historia wyszukiwania | `.json` | `data/messenger/` |
+| Zainteresowania | `.json` | `data/messenger/` |
+
+> **Tip:** Pełna instrukcja importu danych Facebook/Messenger: **[Import danych Facebook](Import-danych-Facebook)**
 
 ### Krok 7: Indeksowanie danych
 
 ```bash
 # Pierwszy import (wszystkie typy)
 python scripts/ingest.py --source ./data/
+
+# Import tylko danych Facebook/Messenger
+python scripts/ingest.py --source ./data/messenger --types facebook
+
+# Import wybranych typów
+python scripts/ingest.py --source ./data/ --types messenger,profile,contacts
 
 # Przykładowy output:
 # Connecting to Qdrant...
@@ -184,12 +197,37 @@ python scripts/ingest.py --source ./data/
 #     Found 42 documents
 #   Loading email files...
 #     Found 156 documents
-#   Loading whatsapp files...
-#     Found 23 documents
-# Indexing 221 documents...
-# Successfully indexed 221 documents.
-# Index now contains 1847 vectors.
+#   Loading messenger files...
+#     Found 734 conversations (12847 documents)
+#   Loading profile files...
+#     Found 1 document
+#   Loading contacts files...
+#     Found 1084 documents
+# Indexing 14208 documents...
+# Successfully indexed 14208 documents.
+# Index now contains 42156 vectors.
+#
+# Contact Registry:
+#   Total contacts: 1247
+#   Total messages tracked: 54321
+#   By source: {'messenger': 1084, 'whatsapp': 163}
 ```
+
+**Dostępne typy loaderów:**
+
+| Typ | Opis |
+|-----|------|
+| `text` | Pliki TXT, MD (notatki) |
+| `email` | Pliki EML, MBOX |
+| `whatsapp` | Eksport WhatsApp (TXT) |
+| `messenger` | Wiadomości Messenger (JSON) |
+| `profile` | Profil użytkownika Facebook |
+| `contacts` | Lista znajomych i kontakty z telefonu |
+| `location` | Historia lokalizacji |
+| `search` | Historia wyszukiwania |
+| `interests` | Zainteresowania reklamowe |
+| `all` | Wszystkie powyższe |
+| `facebook` | Wszystkie typy Facebook (messenger + profile + contacts + location + search + interests) |
 
 ### Krok 8: Uruchomienie interfejsu
 
