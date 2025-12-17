@@ -41,6 +41,9 @@ pip install -e .
 # Start Qdrant
 docker-compose up -d
 
+# Detect GPU and auto-configure profile
+python scripts/detect_gpu.py --apply
+
 # Index all data
 python scripts/ingest.py --source ./data/
 
@@ -58,7 +61,7 @@ streamlit run src/ui/app.py
 
 | File | Purpose |
 |------|---------|
-| `src/config.py` | Pydantic settings from .env |
+| `src/config.py` | Pydantic settings + GPU presets from .env |
 | `src/loaders/base.py` | Abstract loader with Template Method pattern |
 | `src/llm/factory.py` | LLM provider factory (Strategy pattern) |
 | `src/rag/query_engine.py` | Main RAG pipeline orchestration |
@@ -66,6 +69,7 @@ streamlit run src/ui/app.py
 | `src/graph/contact_graph.py` | Contact relationship analysis service |
 | `src/storage/contact_registry.py` | SQLite contact tracking and statistics |
 | `src/ui/app.py` | Streamlit chat interface |
+| `scripts/detect_gpu.py` | GPU detection and profile auto-configuration |
 
 ## Data Loaders
 
@@ -84,10 +88,22 @@ streamlit run src/ui/app.py
 ## Configuration
 
 All settings in `.env` (see `.env.example`):
+- `GPU_PROFILE`: low | medium | high | ultra (auto-configures model/TOP_K)
 - `LLM_PROVIDER`: gpt4all | openai | anthropic
 - `QDRANT_HOST/PORT`: Vector DB connection
 - `EMBEDDING_MODEL`: HuggingFace model name
 - `CHUNK_SIZE/OVERLAP`: Document chunking params
+
+### GPU Profiles
+
+| Profile | VRAM | Model | TOP_K |
+|---------|------|-------|-------|
+| `low` | ≤4GB | orca-mini-3b | 3 |
+| `medium` | 6-8GB | mistral-7b | 5 |
+| `high` | 12-16GB | llama-2-13b | 8 |
+| `ultra` | ≥24GB | nous-hermes-13b-Q5 | 12 |
+
+Run `python scripts/detect_gpu.py` to auto-detect and configure.
 
 ## Design Patterns
 

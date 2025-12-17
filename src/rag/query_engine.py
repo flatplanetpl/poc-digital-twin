@@ -113,7 +113,7 @@ class RAGEngine:
             and optionally 'explanation', 'conversation_id', 'filters_applied'
         """
         start_time = time.time()
-        top_k = top_k or settings.top_k
+        top_k = top_k or settings.effective_top_k
 
         # Preprocess query to extract implicit filters
         filters_applied = {}
@@ -280,7 +280,7 @@ class RAGEngine:
 
         return RAGExplanation(
             query_text=query_text,
-            query_embedding_model=settings.embedding_model,
+            query_embedding_model=settings.effective_embedding_model,
             retrieval_mode="similarity",  # Would be "priority_weighted" if using search_with_priority
             retrieval_top_k=top_k,
             documents_retrieved=doc_explanations,
@@ -396,7 +396,7 @@ class RAGEngine:
         Returns:
             List of matching documents with metadata
         """
-        top_k = top_k or settings.top_k
+        top_k = top_k or settings.effective_top_k
 
         filters = {}
         if source_type:

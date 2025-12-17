@@ -150,6 +150,45 @@ QDRANT_PORT=6333
 
 Szczegóły: **[Konfiguracja](Konfiguracja)**
 
+### Krok 5a: Automatyczna konfiguracja GPU (opcjonalne)
+
+Skrypt `detect_gpu.py` wykrywa Twój sprzęt i dobiera optymalny profil:
+
+```bash
+# Zobacz rekomendację
+python scripts/detect_gpu.py
+
+# Przykładowy output:
+# ============================================================
+#   Digital Twin - GPU Detection Report
+# ============================================================
+#
+# Detected GPUs:
+#   - NVIDIA GeForce RTX 3060
+#     Vendor: NVIDIA
+#     VRAM: 12.0 GB
+#
+# ------------------------------------------------------------
+# Recommended Profile: HIGH
+# Confidence: high
+# Reason: NVIDIA GeForce RTX 3060 with 12GB VRAM - great for 13B models
+# ------------------------------------------------------------
+
+# Zastosuj rekomendację do .env
+python scripts/detect_gpu.py --apply
+```
+
+**Profile GPU:**
+
+| Profil | VRAM | Model | Dla kogo |
+|--------|:----:|-------|----------|
+| `low` | ≤4 GB | orca-mini-3b | Laptop bez GPU / CPU only |
+| `medium` | 6-8 GB | mistral-7b | RTX 3060/4060 |
+| `high` | 12-16 GB | llama-2-13b | RTX 3080/4080 |
+| `ultra` | ≥24 GB | nous-hermes-13b | RTX 4090/A100 |
+
+> **Tip:** Jeśli nie masz dedykowanego GPU, skrypt ustawi profil `low` — system będzie działać na CPU.
+
 ### Krok 6: Przygotowanie danych
 
 ```bash

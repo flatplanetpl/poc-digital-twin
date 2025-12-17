@@ -30,7 +30,7 @@ class VectorStore:
 
         # Configure embedding model
         self.embed_model = HuggingFaceEmbedding(
-            model_name=settings.embedding_model
+            model_name=settings.effective_embedding_model
         )
         LlamaSettings.embed_model = self.embed_model
 
@@ -146,7 +146,7 @@ class VectorStore:
         Returns:
             List of search results with content and metadata
         """
-        top_k = top_k or settings.top_k
+        top_k = top_k or settings.effective_top_k
 
         # Build retriever with optional filters
         retriever = self.index.as_retriever(
@@ -199,7 +199,7 @@ class VectorStore:
         # Import here to avoid circular dependency
         from src.rag.priority import rank_documents
 
-        top_k = top_k or settings.top_k
+        top_k = top_k or settings.effective_top_k
         fetch_k = fetch_k or top_k * 3  # Fetch 3x for better re-ranking
 
         # Fetch more candidates

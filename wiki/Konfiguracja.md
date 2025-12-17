@@ -9,13 +9,14 @@ Kompletny przewodnik po wszystkich opcjach konfiguracyjnych Digital Twin.
 1. [Plik .env — przegląd](#plik-env--przegląd)
 2. [Konfiguracja ścieżek](#konfiguracja-ścieżek)
 3. [Tryb offline (FR-P0-2)](#tryb-offline-fr-p0-2)
-4. [Baza wektorowa Qdrant](#baza-wektorowa-qdrant)
-5. [Model embeddingów](#model-embeddingów)
-6. [Dostawcy LLM](#dostawcy-llm)
-7. [Parametry RAG](#parametry-rag)
-8. [Priorytety dokumentów (FR-P0-3)](#priorytety-dokumentów-fr-p0-3)
-9. [Audyt i logowanie](#audyt-i-logowanie)
-10. [Przykładowe konfiguracje](#przykładowe-konfiguracje)
+4. [Profile GPU](#profile-gpu)
+5. [Baza wektorowa Qdrant](#baza-wektorowa-qdrant)
+6. [Model embeddingów](#model-embeddingów)
+7. [Dostawcy LLM](#dostawcy-llm)
+8. [Parametry RAG](#parametry-rag)
+9. [Priorytety dokumentów (FR-P0-3)](#priorytety-dokumentów-fr-p0-3)
+10. [Audyt i logowanie](#audyt-i-logowanie)
+11. [Przykładowe konfiguracje](#przykładowe-konfiguracje)
 
 ---
 
@@ -115,6 +116,89 @@ Gdy `OFFLINE_MODE=true`, w interfejsie Streamlit pojawi się ostrzeżenie:
 
 ```
 ⚠️ TRYB OFFLINE — Chmurowe LLM są wyłączone
+```
+
+---
+
+## Profile GPU
+
+Profile GPU to uproszczona konfiguracja, która automatycznie dobiera parametry na podstawie dostępnej karty graficznej.
+
+### Automatyczna detekcja
+
+```bash
+# Wyświetl rekomendację
+python scripts/detect_gpu.py
+
+# Zastosuj do pliku .env
+python scripts/detect_gpu.py --apply
+
+# Output jako JSON (do automatyzacji)
+python scripts/detect_gpu.py --json
+
+# Wymuś konkretny profil
+python scripts/detect_gpu.py --profile high --apply
+```
+
+### Dostępne profile
+
+| Profil | VRAM | Model LLM | TOP_K | Embedding | Opis |
+|--------|:----:|-----------|:-----:|-----------|------|
+| `low` | ≤4 GB | orca-mini-3b | 3 | all-MiniLM-L6-v2 | CPU/iGPU, podstawowy |
+| `medium` | 6-8 GB | mistral-7b | 5 | all-MiniLM-L6-v2 | RTX 3060/4060, zbalansowany |
+| `high` | 12-16 GB | llama-2-13b | 8 | all-mpnet-base-v2 | RTX 3080/4080, wysoka jakość |
+| `ultra` | ≥24 GB | nous-hermes-13b-Q5 | 12 | all-mpnet-base-v2 | RTX 4090/A100, maksymalna |
+
+### Konfiguracja w .env
+
+```bash
+# Ustaw profil — nadpisuje GPT4ALL_MODEL, TOP_K, EMBEDDING_MODEL
+GPU_PROFILE=medium
+
+# Lub zostaw puste dla ręcznej konfiguracji
+# GPU_PROFILE=
+```
+
+### Kiedy używać profili GPU?
+
+**Używaj profili GPU gdy:**
+- Chcesz szybko skonfigurować system bez zgłębiania szczegółów
+- Testujesz na różnych maszynach (laptop vs. stacja robocza)
+- Automatyzujesz deployment
+
+**Używaj ręcznej konfiguracji gdy:**
+- Masz specyficzne wymagania (np. konkretny model LLM)
+- Chcesz mieszać ustawienia z różnych profili
+- Korzystasz z cloud LLM (OpenAI, Anthropic)
+
+### Wykrywane GPU
+
+Skrypt `detect_gpu.py` wykrywa:
+
+| Producent | Metoda detekcji | Dokładność VRAM |
+|-----------|-----------------|:---------------:|
+| **NVIDIA** | `nvidia-smi` | Dokładna |
+| **AMD** | `rocm-smi` lub `lspci` + heurystyka | Średnia |
+| **Intel** | `lspci` (Linux) lub WMI (Windows) | Szacunkowa |
+
+### Programowy dostęp do profili
+
+```python
+from src.config import settings, GPU_PRESETS
+
+# Sprawdź aktualny profil
+if settings.gpu_profile:
+    print(f"Profil: {settings.gpu_profile}")
+    settings.print_gpu_info()
+
+# Użyj efektywnych ustawień (respektują profil)
+print(f"Model: {settings.effective_gpt4all_model}")
+print(f"TOP_K: {settings.effective_top_k}")
+print(f"Embedding: {settings.effective_embedding_model}")
+
+# Przeglądaj dostępne profile
+for name, preset in GPU_PRESETS.items():
+    print(f"{name}: {preset.description}")
 ```
 
 ---

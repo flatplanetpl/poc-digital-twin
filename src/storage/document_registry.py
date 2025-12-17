@@ -206,7 +206,7 @@ class DocumentRegistry:
                         content_hash,
                         source_type,
                         chunk_count,
-                        settings.embedding_model,
+                        settings.effective_embedding_model,
                         now.isoformat(),
                         DocumentStatus.ACTIVE.value,
                         json.dumps(metadata) if metadata else None,
@@ -219,7 +219,7 @@ class DocumentRegistry:
                     content_hash=content_hash,
                     source_type=source_type,
                     chunk_count=chunk_count,
-                    embedding_model=settings.embedding_model,
+                    embedding_model=settings.effective_embedding_model,
                     metadata_version=existing.metadata_version,
                     first_indexed_at=existing.first_indexed_at,
                     last_indexed_at=now,
@@ -243,7 +243,7 @@ class DocumentRegistry:
                         content_hash,
                         source_type,
                         chunk_count,
-                        settings.embedding_model,
+                        settings.effective_embedding_model,
                         1,
                         now.isoformat(),
                         now.isoformat(),
@@ -257,7 +257,7 @@ class DocumentRegistry:
                     content_hash=content_hash,
                     source_type=source_type,
                     chunk_count=chunk_count,
-                    embedding_model=settings.embedding_model,
+                    embedding_model=settings.effective_embedding_model,
                     metadata_version=1,
                     first_indexed_at=now,
                     last_indexed_at=now,
@@ -500,7 +500,7 @@ class DocumentRegistry:
 
             models_used = {row["embedding_model"]: row["count"] for row in rows}
 
-            current_model = settings.embedding_model
+            current_model = settings.effective_embedding_model
             compatible = len(models_used) <= 1 and current_model in models_used
 
             return {
